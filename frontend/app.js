@@ -1,30 +1,47 @@
 /**
  * Med.tn — Microservice Tournée Web Frontend Application
+ *
+ * Le formulaire ne travaille plus qu'avec des ADRESSES PHYSIQUES (agent et
+ * patients) : la conversion en lat/lng se fait ici, côté navigateur, via
+ * Nominatim (OpenStreetMap) — uniquement pour l'affichage sur la carte
+ * Leaflet. Le microservice (app/api.py) fait sa PROPRE conversion adresse ->
+ * lat/lng côté serveur (app/geocoding.py) : les deux géocodages sont
+ * indépendants, ce qui est acceptable pour ce POC (pas d'état partagé,
+ * cohérent avec le caractère stateless du microservice).
  */
 
 const API_BASE_URL = "http://127.0.0.1:8000";
 
-// Default dataset matching app/data.py
+// Géocodage côté client (Nominatim, API publique OpenStreetMap)
+const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
+const DELAI_MIN_GEOCODAGE_MS = 1000; // politique d'usage Nominatim (max ~1 req/s)
+let _dernierAppelGeocodage = 0;
+
+// Jeu de données par défaut, mêmes adresses que app/data.py (cohérence démo)
 const DEFAULT_PATIENTS = [
-  { id: "P1", nom: "Trabelsi", prenom: "Amel", contact: "+216 20 123 456", lat: 36.8189, lng: 10.1658, service: "prelevement", urgence: 2, duree: 20 },
-  { id: "P2", nom: "Gharbi", prenom: "Sami", contact: "+216 22 234 567", lat: 36.8020, lng: 10.1900, service: "consultation", urgence: 1, duree: 30 },
-  { id: "P3", nom: "Bouazizi", prenom: "Rim", contact: "+216 24 345 678", lat: 36.8250, lng: 10.1750, service: "suivi", urgence: 3, duree: 15 },
-  { id: "P4", nom: "Jendoubi", prenom: "Karim", contact: "+216 26 456 789", lat: 36.8663, lng: 10.3242, service: "consultation", urgence: 1, duree: 25 },
-  { id: "P5", nom: "Cherif", prenom: "Nadia", contact: "+216 27 567 890", lat: 36.8622, lng: 10.1956, service: "prelevement", urgence: 2, duree: 15 },
-  { id: "P6", nom: "Mabrouk", prenom: "Youssef", contact: "+216 28 678 901", lat: 36.8093, lng: 10.1408, service: "suivi", urgence: 2, duree: 20 },
-  { id: "P7", nom: "Ayari", prenom: "Salma", contact: "+216 29 789 012", lat: 36.7538, lng: 10.2270, service: "prelevement", urgence: 3, duree: 10 },
-  { id: "P8", nom: "Khemiri", prenom: "Mehdi", contact: "+216 21 890 123", lat: 36.8397, lng: 10.2350, service: "consultation", urgence: 1, duree: 30 }
+  { id: "P1", nom: "Trabelsi", prenom: "Amel", contact: "+216 20 123 456", adresse: "Rue de Marseille, Tunis, Tunisie", service: "prelevement", urgence: 2, duree: 20 },
+  { id: "P2", nom: "Gharbi", prenom: "Sami", contact: "+216 22 234 567", adresse: "Avenue Mohamed V, Tunis, Tunisie", service: "consultation", urgence: 1, duree: 30 },
+  { id: "P3", nom: "Bouazizi", prenom: "Rim", contact: "+216 24 345 678", adresse: "Avenue de Paris, Tunis, Tunisie", service: "suivi", urgence: 3, duree: 15 },
+  { id: "P4", nom: "Jendoubi", prenom: "Karim", contact: "+216 26 456 789", adresse: "La Marsa, Tunis, Tunisie", service: "consultation", urgence: 1, duree: 25 },
+  { id: "P5", nom: "Cherif", prenom: "Nadia", contact: "+216 27 567 890", adresse: "Ariana, Tunisie", service: "prelevement", urgence: 2, duree: 15 },
+  { id: "P6", nom: "Mabrouk", prenom: "Youssef", contact: "+216 28 678 901", adresse: "Le Bardo, Tunisie", service: "suivi", urgence: 2, duree: 20 },
+  { id: "P7", nom: "Ayari", prenom: "Salma", contact: "+216 29 789 012", adresse: "Ben Arous, Tunisie", service: "prelevement", urgence: 3, duree: 10 },
+  { id: "P8", nom: "Khemiri", prenom: "Mehdi", contact: "+216 21 890 123", adresse: "Le Kram, Tunis, Tunisie", service: "consultation", urgence: 1, duree: 30 }
 ];
+
+// Centre par défaut (Tunis) tant que l'adresse de l'agent n'est pas géocodée
+const CENTRE_PAR_DEFAUT = { lat: 36.8065, lng: 10.1815 };
 
 // App State
 let state = {
   agent: {
     id: "A1",
-    lat: 36.8065,
-    lng: 10.1815
+    adresse: "Avenue Habib Bourguiba, Tunis, Tunisie"
   },
   patients: JSON.parse(JSON.stringify(DEFAULT_PATIENTS)),
-  lastOptimization: null
+  lastOptimization: null,
+  cacheGeocodage: {},   // adresse (string, trim) -> {lat, lng}
+  geocodageEnCours: false
 };
 
 // Map & Layer references
@@ -33,65 +50,165 @@ let markersGroup = null;
 let routePolyline = null;
 
 // Initialize on DOM ready
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   initMap();
   bindEvents();
+  await geocoderTousLesPoints();
   renderPatients();
   checkApiHealth();
 });
 
 /* --------------------------------------------------------------------------
+   Géocodage côté client (adresse -> lat/lng, pour affichage carte uniquement)
+   -------------------------------------------------------------------------- */
+/**
+ * Génère des versions progressivement simplifiées d'une adresse (même
+ * logique que app/geocoding.py côté serveur), en retirant le segment le
+ * plus précis (rue + numéro) à chaque étape, pour ne garder à la fin que
+ * la ville/le pays.
+ */
+function variantesSimplifiees(adresse) {
+  const segments = adresse.split(",").map(s => s.trim()).filter(Boolean);
+  const variantes = [];
+  for (let i = 0; i < segments.length; i++) {
+    const variante = segments.slice(i).join(", ");
+    if (variante && !variantes.includes(variante)) variantes.push(variante);
+  }
+  return variantes.length ? variantes : [adresse.trim()];
+}
+
+async function geocoderAdresseClient(adresse) {
+  const cle = (adresse || "").trim();
+  if (!cle) throw new Error("Adresse vide.");
+  if (state.cacheGeocodage[cle]) return state.cacheGeocodage[cle];
+
+  let derniereErreur = null;
+
+  for (const variante of variantesSimplifiees(cle)) {
+    const attente = DELAI_MIN_GEOCODAGE_MS - (Date.now() - _dernierAppelGeocodage);
+    if (attente > 0) {
+      await new Promise(resolve => setTimeout(resolve, attente));
+    }
+
+    const url = `${NOMINATIM_URL}?format=json&limit=1&q=${encodeURIComponent(variante)}`;
+    try {
+      const reponse = await fetch(url, { headers: { "Accept-Language": "fr" } });
+      _dernierAppelGeocodage = Date.now();
+      if (!reponse.ok) throw new Error(`HTTP ${reponse.status}`);
+      const resultats = await reponse.json();
+
+      if (resultats && resultats.length > 0) {
+        const coords = { lat: parseFloat(resultats[0].lat), lng: parseFloat(resultats[0].lon) };
+        state.cacheGeocodage[cle] = coords; // indexé sur l'adresse ORIGINALE
+        return coords;
+      }
+    } catch (erreur) {
+      _dernierAppelGeocodage = Date.now();
+      derniereErreur = erreur;
+    }
+  }
+
+  throw new Error(
+    derniereErreur
+      ? `Géocodage impossible pour "${adresse}" (${derniereErreur.message})`
+      : `Adresse introuvable, même après simplification : "${adresse}"`
+  );
+}
+
+function coordsDe(adresse) {
+  return state.cacheGeocodage[(adresse || "").trim()] || null;
+}
+
+/**
+ * Géocode l'adresse de l'agent et de tous les patients (séquentiellement,
+ * pour respecter la limite de débit Nominatim). Ignore silencieusement les
+ * adresses déjà en cache. Les échecs individuels (adresse introuvable) sont
+ * consignés dans la console et signalés dans la liste des patients, sans
+ * bloquer le géocodage des autres adresses.
+ */
+async function geocoderTousLesPoints() {
+  if (state.geocodageEnCours) return;
+  state.geocodageEnCours = true;
+  afficherStatutGeocodage(true);
+
+  try {
+    await geocoderAdresseClient(state.agent.adresse).catch(err => console.warn(err.message));
+
+    for (const patient of state.patients) {
+      await geocoderAdresseClient(patient.adresse).catch(err => console.warn(err.message));
+    }
+  } finally {
+    state.geocodageEnCours = false;
+    afficherStatutGeocodage(false);
+    updateMapMarkers();
+  }
+}
+
+function afficherStatutGeocodage(enCours) {
+  const tagTexte = document.getElementById("agent-location-tag-text");
+  if (!tagTexte) return;
+
+  if (enCours) {
+    tagTexte.textContent = "Localisation en cours...";
+    return;
+  }
+
+  const coords = coordsDe(state.agent.adresse);
+  tagTexte.textContent = coords ? "Adresse localisée" : "Adresse introuvable";
+}
+
+/* --------------------------------------------------------------------------
    Map Initialization & Render
    -------------------------------------------------------------------------- */
 function initMap() {
-  map = L.map("map").setView([state.agent.lat, state.agent.lng], 12);
+  map = L.map("map").setView([CENTRE_PAR_DEFAUT.lat, CENTRE_PAR_DEFAUT.lng], 12);
 
-  // Light tiles
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxZoom: 18
   }).addTo(map);
 
   markersGroup = L.layerGroup().addTo(map);
-  updateMapMarkers();
 }
 
 function updateMapMarkers(tourneeOrder = []) {
   markersGroup.clearLayers();
 
-  // Agent Marker
-  const agentLat = parseFloat(document.getElementById("agent-lat").value) || state.agent.lat;
-  const agentLng = parseFloat(document.getElementById("agent-lng").value) || state.agent.lng;
-  state.agent.lat = agentLat;
-  state.agent.lng = agentLng;
+  // Marqueur agent (uniquement si son adresse a pu être géocodée)
+  const coordsAgent = coordsDe(state.agent.adresse);
+  if (coordsAgent) {
+    const agentMarker = L.circleMarker([coordsAgent.lat, coordsAgent.lng], {
+      radius: 10,
+      fillColor: "#2563eb",
+      color: "#ffffff",
+      weight: 3,
+      opacity: 1,
+      fillOpacity: 0.9
+    }).bindPopup(`<b>Agent ${state.agent.id}</b><br>${state.agent.adresse}`);
 
-  const agentMarker = L.circleMarker([agentLat, agentLng], {
-    radius: 10,
-    fillColor: "#2563eb",
-    color: "#ffffff",
-    weight: 3,
-    opacity: 1,
-    fillOpacity: 0.9
-  }).bindPopup(`<b>Agent ${state.agent.id}</b><br>Départ: Tunis Centre<br>Lat: ${agentLat}, Lng: ${agentLng}`);
+    markersGroup.addLayer(agentMarker);
+    map.setView([coordsAgent.lat, coordsAgent.lng], map.getZoom());
+  }
 
-  markersGroup.addLayer(agentMarker);
-
-  // Patient Markers
+  // Marqueurs patients (uniquement pour les adresses déjà géocodées)
   state.patients.forEach(patient => {
+    const coords = coordsDe(patient.adresse);
+    if (!coords) return;
+
     let color = "#059669"; // Urgence 1
     if (patient.urgence === 2) color = "#d97706";
     if (patient.urgence === 3) color = "#dc2626";
 
-    // Order index if tournee is available
-    let orderIndex = tourneeOrder.indexOf(patient.id);
-    let popupContent = `
+    const orderIndex = tourneeOrder.indexOf(patient.id);
+    const popupContent = `
       <b>[${patient.id}] ${patient.nom} ${patient.prenom}</b><br>
+      ${patient.adresse}<br>
       Urgence: <strong>${patient.urgence}</strong> | Service: ${patient.service}<br>
       Durée: ${patient.duree} min<br>
       ${orderIndex >= 0 ? `<span style="color:#2563eb; font-weight:bold;">Ordre de visite: Step ${orderIndex + 1}</span>` : ''}
     `;
 
-    const marker = L.circleMarker([patient.lat, patient.lng], {
+    const marker = L.circleMarker([coords.lat, coords.lng], {
       radius: 8,
       fillColor: color,
       color: "#ffffff",
@@ -107,23 +224,22 @@ function updateMapMarkers(tourneeOrder = []) {
 function drawRouteOnMap(tourneeOrder) {
   if (routePolyline) {
     map.removeLayer(routePolyline);
+    routePolyline = null;
   }
 
-  if (!tourneeOrder || tourneeOrder.length === 0) return;
+  const coordsAgent = coordsDe(state.agent.adresse);
+  if (!tourneeOrder || tourneeOrder.length === 0 || !coordsAgent) return;
 
-  const coords = [];
-  // Start at Agent
-  coords.push([state.agent.lat, state.agent.lng]);
+  const coords = [[coordsAgent.lat, coordsAgent.lng]];
 
-  // Add each patient in optimized order
   tourneeOrder.forEach(pid => {
     const patient = state.patients.find(p => p.id === pid);
-    if (patient) {
-      coords.push([patient.lat, patient.lng]);
-    }
+    const c = patient ? coordsDe(patient.adresse) : null;
+    if (c) coords.push([c.lat, c.lng]);
   });
 
-  // Draw smooth polyline
+  if (coords.length < 2) return;
+
   routePolyline = L.polyline(coords, {
     color: "#2563eb",
     weight: 4,
@@ -131,7 +247,6 @@ function drawRouteOnMap(tourneeOrder) {
     dashArray: "6, 8"
   }).addTo(map);
 
-  // Fit map bounds to show full route
   map.fitBounds(routePolyline.getBounds(), { padding: [40, 40] });
 }
 
@@ -158,6 +273,10 @@ function renderPatients() {
     if (p.urgence === 2) { badgeClass = "badge-u2"; urgenceLabel = "Urgence 2 (Moyenne)"; }
     if (p.urgence === 3) { badgeClass = "badge-u3"; urgenceLabel = "Urgence 3 (Élevée)"; }
 
+    const localise = coordsDe(p.adresse) !== null;
+    const adresseIcone = localise ? "fa-location-crosshairs" : "fa-triangle-exclamation";
+    const adresseCouleur = localise ? "" : "style=\"color:#dc2626;\"";
+
     return `
       <div class="patient-card-item">
         <div class="patient-item-header">
@@ -179,8 +298,8 @@ function renderPatients() {
           <span class="patient-meta-item"><i class="fa-solid fa-phone"></i> ${p.contact || 'N/A'}</span>
         </div>
 
-        <div class="patient-coords-row">
-          <i class="fa-solid fa-location-crosshairs"></i> Lat: ${p.lat}, Lng: ${p.lng}
+        <div class="patient-coords-row" ${adresseCouleur}>
+          <i class="fa-solid ${adresseIcone}"></i> ${p.adresse}${!localise ? ' (non localisée)' : ''}
         </div>
       </div>
     `;
@@ -192,7 +311,6 @@ function renderPatients() {
 function deletePatient(patientId) {
   state.patients = state.patients.filter(p => p.id !== patientId);
   renderPatients();
-  // Clear polyline if list changed
   if (routePolyline) {
     map.removeLayer(routePolyline);
     routePolyline = null;
@@ -219,25 +337,23 @@ async function checkApiHealth() {
 }
 
 async function runOptimization() {
-  // Update agent from input fields
   state.agent.id = document.getElementById("agent-id").value.trim() || "A1";
-  state.agent.lat = parseFloat(document.getElementById("agent-lat").value) || 36.8065;
-  state.agent.lng = parseFloat(document.getElementById("agent-lng").value) || 10.1815;
+  state.agent.adresse = document.getElementById("agent-adresse").value.trim() || state.agent.adresse;
 
   const btnOpt = document.getElementById("btn-optimiser");
   btnOpt.disabled = true;
   btnOpt.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Calcul en cours...`;
 
+  // Le microservice géocode lui-même les adresses (app/geocoding.py) :
+  // on ne lui envoie donc que des adresses, jamais de lat/lng.
   const payload = {
     agent: {
       id: state.agent.id,
-      lat: state.agent.lat,
-      lng: state.agent.lng
+      adresse: state.agent.adresse
     },
     patients: state.patients.map(p => ({
       id: p.id,
-      lat: p.lat,
-      lng: p.lng,
+      adresse: p.adresse,
       service: p.service,
       urgence: parseInt(p.urgence, 10),
       duree: parseInt(p.duree, 10)
@@ -258,6 +374,12 @@ async function runOptimization() {
 
     const data = await response.json();
     state.lastOptimization = data;
+
+    // S'assure que toutes les adresses sont géocodées côté client avant
+    // de tracer la carte (au cas où une adresse aurait été ajoutée après
+    // le dernier géocodage groupé).
+    await geocoderTousLesPoints();
+
     displayOptimizationResults(data);
     drawRouteOnMap(data.tournee);
     updateMapMarkers(data.tournee);
@@ -274,9 +396,9 @@ function displayOptimizationResults(data) {
   document.getElementById("res-distance").textContent = `${data.distance_totale} km`;
   document.getElementById("res-duree").textContent = `${data.duree_totale_min} min`;
   document.getElementById("res-pos-finale").textContent = `Lat: ${data.position_finale.lat.toFixed(4)}, Lng: ${data.position_finale.lng.toFixed(4)}`;
-  
+
   const timelineContainer = document.getElementById("timeline-list");
-  
+
   if (!data.tournee || data.tournee.length === 0) {
     timelineContainer.innerHTML = `<p class="empty-timeline-text">La tournée est vide.</p>`;
     return;
@@ -308,20 +430,26 @@ function displayOptimizationResults(data) {
    Modal & Event Bindings
    -------------------------------------------------------------------------- */
 function bindEvents() {
-  // Optimization click
   document.getElementById("btn-optimiser").addEventListener("click", runOptimization);
 
-  // Reset default patients
-  document.getElementById("btn-reset-patients").addEventListener("click", () => {
+  document.getElementById("btn-reset-patients").addEventListener("click", async () => {
     state.patients = JSON.parse(JSON.stringify(DEFAULT_PATIENTS));
     renderPatients();
     if (routePolyline) { map.removeLayer(routePolyline); routePolyline = null; }
+    await geocoderTousLesPoints();
+    renderPatients();
   });
 
-  // Modal open & close
+  // Ré-géocoder si l'agent change d'adresse (au blur, pour éviter un appel
+  // réseau à chaque frappe)
+  document.getElementById("agent-adresse").addEventListener("change", async (e) => {
+    state.agent.adresse = e.target.value.trim();
+    await geocoderTousLesPoints();
+    renderPatients();
+  });
+
   const modal = document.getElementById("modal-add-patient");
   document.getElementById("btn-open-add-modal").addEventListener("click", () => {
-    // Generate next ID
     const nextIdNum = state.patients.length + 1;
     document.getElementById("p-id").value = `P${nextIdNum}`;
     modal.classList.add("show");
@@ -331,16 +459,13 @@ function bindEvents() {
   document.getElementById("btn-close-modal").addEventListener("click", closeModal);
   document.getElementById("btn-cancel-modal").addEventListener("click", closeModal);
 
-  // Preset location buttons in modal
   document.querySelectorAll(".preset-btn").forEach(btn => {
     btn.addEventListener("click", (e) => {
-      document.getElementById("p-lat").value = e.target.dataset.lat;
-      document.getElementById("p-lng").value = e.target.dataset.lng;
+      document.getElementById("p-adresse").value = e.target.dataset.adresse;
     });
   });
 
-  // Form submit
-  document.getElementById("form-add-patient").addEventListener("submit", (e) => {
+  document.getElementById("form-add-patient").addEventListener("submit", async (e) => {
     e.preventDefault();
 
     const newPatient = {
@@ -351,11 +476,9 @@ function bindEvents() {
       service: document.getElementById("p-service").value,
       urgence: parseInt(document.getElementById("p-urgence").value, 10),
       duree: parseInt(document.getElementById("p-duree").value, 10),
-      lat: parseFloat(document.getElementById("p-lat").value),
-      lng: parseFloat(document.getElementById("p-lng").value)
+      adresse: document.getElementById("p-adresse").value.trim()
     };
 
-    // Check duplicate ID
     if (state.patients.some(p => p.id === newPatient.id)) {
       alert(`Un patient avec l'ID ${newPatient.id} existe déjà.`);
       return;
@@ -365,5 +488,8 @@ function bindEvents() {
     renderPatients();
     closeModal();
     document.getElementById("form-add-patient").reset();
+
+    await geocoderTousLesPoints();
+    renderPatients();
   });
 }

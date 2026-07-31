@@ -4,7 +4,27 @@ et assemblage final dans optimiser_tournee(). Inclut aussi
 reordonner_manuellement() pour le réordonnancement manuel (UC4).
 """
 
-from app.distance import construire_df_points, construire_matrice_distances
+from app.distance import (
+    construire_df_points,
+    construire_matrice_distances,
+    construire_matrice_distances_osm,
+)
+
+
+def _construire_matrice(df_points, graphe_osm=None):
+    """
+    Sélectionne la source de distance à utiliser :
+    - si `graphe_osm` est fourni (graphe déjà chargé via
+      app.distance.charger_graphe_zone()) -> distances ROUTIÈRES RÉELLES
+      (construire_matrice_distances_osm()) ;
+    - sinon -> Haversine (à vol d'oiseau), comportement par défaut inchangé.
+
+    Centralise ce choix ici pour que optimiser_tournee() et
+    reordonner_manuellement() restent cohérents entre eux.
+    """
+    if graphe_osm is not None:
+        return construire_matrice_distances_osm(df_points, graphe_osm)
+    return construire_matrice_distances(df_points)
 
 
 def nearest_neighbor(agent_id, patient_ids, matrice_distances):
@@ -164,7 +184,7 @@ def deux_opt_par_groupe(agent_id, tournee, matrice_distances, df_patients):
     return tournee_finale
 
 
-def optimiser_tournee(df_agent, df_patients):
+def optimiser_tournee(df_agent, df_patients, graphe_osm=None):
     """
     Fonction principale : assemble matrice de distances, plus proche voisin
     à priorité stricte par urgence, puis 2-opt (par groupe d'urgence) pour
@@ -172,6 +192,10 @@ def optimiser_tournee(df_agent, df_patients):
 
     df_agent       : DataFrame d'un seul agent avec 'id', 'lat', 'lng'
     df_patients    : DataFrame des patients affectés à cet agent
+    graphe_osm     : graphe OSMnx optionnel (cf. app.distance.charger_graphe_zone()).
+                      Si fourni, les distances routières réelles sont utilisées
+                      à la place de Haversine — sans aucun autre changement de
+                      comportement (algorithmes, contrat de sortie identiques).
 
     Retourne : dict conforme au contrat API (§5 de l'étude)
     """
@@ -191,7 +215,7 @@ def optimiser_tournee(df_agent, df_patients):
         }
 
     df_points = construire_df_points(df_agent, df_patients)
-    matrice_distances = construire_matrice_distances(df_points)
+    matrice_distances = _construire_matrice(df_points, graphe_osm)
 
     tournee_initiale = nearest_neighbor_priorite(
         agent_id, patient_ids, matrice_distances, df_patients
@@ -215,13 +239,17 @@ def optimiser_tournee(df_agent, df_patients):
     }
 
 
-def reordonner_manuellement(resultat_optimisation, nouvel_ordre, df_agent, df_patients):
+def reordonner_manuellement(resultat_optimisation, nouvel_ordre, df_agent, df_patients, graphe_osm=None):
     """
     Applique un réordonnancement manuel décidé par l'agent sur une tournée
     déjà proposée par optimiser_tournee() (UC4). Conserve la proposition
     initiale pour comparaison ultérieure (UC7).
 
     Limite stricte : réordonner uniquement, jamais ajouter/retirer un patient.
+
+    graphe_osm : cf. optimiser_tournee() — même source de distance que celle
+                 utilisée pour calculer la tournée initiale, pour que la
+                 comparaison "proposé vs. réalisé" (UC7) reste cohérente.
     """
     tournee_initiale = resultat_optimisation["tournee"]
 
@@ -236,7 +264,7 @@ def reordonner_manuellement(resultat_optimisation, nouvel_ordre, df_agent, df_pa
 
     agent_id = df_agent.iloc[0]["id"]
     df_points = construire_df_points(df_agent, df_patients)
-    matrice_distances = construire_matrice_distances(df_points)
+    matrice_distances = _construire_matrice(df_points, graphe_osm)
 
     distance_totale = longueur_tournee(agent_id, nouvel_ordre, matrice_distances)
     duree_service = df_patients.set_index("id").loc[nouvel_ordre, "duree"].sum()

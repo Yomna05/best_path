@@ -1,22 +1,46 @@
 """
 Tests de l'endpoint POST /api/v1/reordonner-tournee (UC4 exposé via API).
+
+Le géocodage (Nominatim) est simulé (mock), comme dans test_api.py.
 """
+
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 
+import app.api as api
 from app.api import app
 
 client = TestClient(app)
 
 
+_ADRESSES_CONNUES = {
+    "12 Avenue Habib Bourguiba, Tunis": (36.8065, 10.1815),        # A1 (agent)
+    "5 Rue de la Kasbah, Tunis": (36.8189, 10.1658),               # P1
+    "8 Rue Ibn Khaldoun, Tunis": (36.8020, 10.1900),               # P2
+    "3 Rue Sidi Bou Said, Tunis": (36.8250, 10.1750),              # P3
+}
+
+
+def _fausse_geocoder_adresse(adresse):
+    if adresse in _ADRESSES_CONNUES:
+        return _ADRESSES_CONNUES[adresse]
+    raise ValueError(f"Adresse introuvable : '{adresse}'")
+
+
+@pytest.fixture(autouse=True)
+def _mock_geocodage(monkeypatch):
+    monkeypatch.setattr(api, "geocoder_adresse", MagicMock(side_effect=_fausse_geocoder_adresse))
+
+
 def payload_valide():
     return {
-        "agent": {"id": "A1", "lat": 36.8065, "lng": 10.1815},
+        "agent": {"id": "A1", "adresse": "12 Avenue Habib Bourguiba, Tunis"},
         "patients": [
-            {"id": "P1", "lat": 36.8189, "lng": 10.1658, "service": "prelevement", "urgence": 2, "duree": 20},
-            {"id": "P2", "lat": 36.8020, "lng": 10.1900, "service": "consultation", "urgence": 1, "duree": 30},
-            {"id": "P3", "lat": 36.8250, "lng": 10.1750, "service": "suivi", "urgence": 3, "duree": 15},
+            {"id": "P1", "adresse": "5 Rue de la Kasbah, Tunis", "service": "prelevement", "urgence": 2, "duree": 20},
+            {"id": "P2", "adresse": "8 Rue Ibn Khaldoun, Tunis", "service": "consultation", "urgence": 1, "duree": 30},
+            {"id": "P3", "adresse": "3 Rue Sidi Bou Said, Tunis", "service": "suivi", "urgence": 3, "duree": 15},
         ],
         "tournee_initiale": ["P2", "P1", "P3"],
         "nouvel_ordre": ["P2", "P3", "P1"],

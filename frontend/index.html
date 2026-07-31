@@ -54,16 +54,12 @@
             <label for="agent-id">ID Agent</label>
             <input type="text" id="agent-id" value="A1" placeholder="Ex: A1">
           </div>
-          <div class="input-group">
-            <label for="agent-lat">Latitude</label>
-            <input type="number" step="any" id="agent-lat" value="36.8065" placeholder="Ex: 36.8065">
+          <div class="input-group" style="grid-column: span 2;">
+            <label for="agent-adresse">Adresse</label>
+            <input type="text" id="agent-adresse" value="Avenue Habib Bourguiba, Tunis, Tunisie" placeholder="Ex: Avenue Habib Bourguiba, Tunis">
           </div>
-          <div class="input-group">
-            <label for="agent-lng">Longitude</label>
-            <input type="number" step="any" id="agent-lng" value="10.1815" placeholder="Ex: 10.1815">
-          </div>
-          <div class="agent-location-tag">
-            <i class="fa-solid fa-location-dot"></i> Tunis Centre
+          <div class="agent-location-tag" id="agent-location-tag">
+            <i class="fa-solid fa-location-dot"></i> <span id="agent-location-tag-text">Localisation...</span>
           </div>
         </div>
       </div>
@@ -233,22 +229,18 @@
               <label for="p-duree">Durée du soin (min) *</label>
               <input type="number" id="p-duree" value="20" min="5" max="180" required>
             </div>
-            <div class="form-group">
-              <label for="p-lat">Latitude *</label>
-              <input type="number" step="any" id="p-lat" required placeholder="Ex: 36.8100">
-            </div>
             <div class="form-group full-width">
-              <label for="p-lng">Longitude *</label>
-              <input type="number" step="any" id="p-lng" required placeholder="Ex: 10.1700">
+              <label for="p-adresse">Adresse *</label>
+              <input type="text" id="p-adresse" required placeholder="Ex: 12 Rue de Marseille, Tunis">
             </div>
           </div>
           <div class="quick-preset-container">
-            <span class="preset-label"><i class="fa-solid fa-bolt"></i> Coordonnées rapides (Grand Tunis) :</span>
-            <button type="button" class="preset-btn" data-lat="36.8189" data-lng="10.1658">Tunis</button>
-            <button type="button" class="preset-btn" data-lat="36.8663" data-lng="10.3242">La Marsa</button>
-            <button type="button" class="preset-btn" data-lat="36.8622" data-lng="10.1956">Ariana</button>
-            <button type="button" class="preset-btn" data-lat="36.8093" data-lng="10.1408">Bardo</button>
-            <button type="button" class="preset-btn" data-lat="36.7538" data-lng="10.2270">Ben Arous</button>
+            <span class="preset-label"><i class="fa-solid fa-bolt"></i> Zones rapides (Grand Tunis) :</span>
+            <button type="button" class="preset-btn" data-adresse="Tunis, Tunisie">Tunis</button>
+            <button type="button" class="preset-btn" data-adresse="La Marsa, Tunis, Tunisie">La Marsa</button>
+            <button type="button" class="preset-btn" data-adresse="Ariana, Tunisie">Ariana</button>
+            <button type="button" class="preset-btn" data-adresse="Le Bardo, Tunisie">Bardo</button>
+            <button type="button" class="preset-btn" data-adresse="Ben Arous, Tunisie">Ben Arous</button>
           </div>
         </div>
 

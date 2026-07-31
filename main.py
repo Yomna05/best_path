@@ -2,7 +2,7 @@
 Point d'entrée / démonstration standalone du microservice de tournée.
 
 Exécute le flux complet : chargement des données -> optimisation ->
-export CSV -> exemple de réordonnancement manuel (UC4).
+exemple de réordonnancement manuel (UC4).
 
 Usage : python main.py
 """
