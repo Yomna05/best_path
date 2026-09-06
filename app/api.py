@@ -210,8 +210,32 @@ def racine(request: Request):
     accept = request.headers.get("accept", "")
     index_file = os.path.join(frontend_dir, "index.html")
     if "text/html" in accept and os.path.exists(index_file):
-        return FileResponse(index_file)
+        return FileResponse(index_file, media_type="text/html")
     return {"message": "Microservice de tournée opérationnel. Voir /docs pour la documentation."}
+
+
+@app.get("/styles.css")
+def serve_styles_css():
+    file_path = os.path.join(frontend_dir, "styles.css")
+    if os.path.isfile(file_path):
+        return FileResponse(file_path, media_type="text/css")
+    raise HTTPException(status_code=404, detail="Fichier styles.css introuvable.")
+
+
+@app.get("/app.js")
+def serve_app_js():
+    file_path = os.path.join(frontend_dir, "app.js")
+    if os.path.isfile(file_path):
+        return FileResponse(file_path, media_type="application/javascript")
+    raise HTTPException(status_code=404, detail="Fichier app.js introuvable.")
+
+
+@app.get("/logo-med.png")
+def serve_logo():
+    file_path = os.path.join(frontend_dir, "logo-med.png")
+    if os.path.isfile(file_path):
+        return FileResponse(file_path, media_type="image/png")
+    raise HTTPException(status_code=404, detail="Logo introuvable.")
 
 
 

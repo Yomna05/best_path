@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Med.tn — Optimization Tournée De Soins à Domicile</title>
+  <title>Med à Domicile — Gestion de Tournées de Soins</title>
+  <link rel="icon" type="image/png" href="/logo-med.png">
   
   <!-- Fonts & Icons -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -22,10 +23,18 @@
   <header class="app-header">
     <div class="header-container">
       <div class="brand-badge">
-        <i class="fa-solid fa-truck-medical brand-icon"></i>
+        <img
+          src="/logo-med.png"
+          alt="Med.tn Logo"
+          class="brand-logo"
+          onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
+        >
+        <span class="brand-icon-fallback" style="display:none;">
+          <i class="fa-solid fa-truck-medical brand-icon"></i>
+        </span>
         <div>
-          <h1 class="brand-title">Med.tn Tournée</h1>
-          <span class="brand-subtitle">Optimisation de Soins à Domicile</span>
+          <h1 class="brand-title">Med à Domicile</h1>
+          <span class="brand-subtitle">Gestion de mes tournées</span>
         </div>
       </div>
       <div class="header-status">
@@ -45,22 +54,19 @@
         <div class="card-header">
           <div class="card-title">
             <i class="fa-solid fa-user-nurse icon-blue"></i>
-            <h3>Coordonnées de l'Agent</h3>
+            <h3>Mes Coordonnées</h3>
           </div>
-          <span class="badge badge-agent" id="agent-id-display">Agent: A1</span>
         </div>
         <div class="agent-inputs">
-          <div class="input-group">
-            <label for="agent-id">ID Agent</label>
-            <input type="text" id="agent-id" value="A1" placeholder="Ex: A1">
-          </div>
           <div class="input-group" style="grid-column: span 2;">
-            <label for="agent-adresse">Adresse</label>
-            <input type="text" id="agent-adresse" value="Avenue Habib Bourguiba, Tunis, Tunisie" placeholder="Ex: Avenue Habib Bourguiba, Tunis">
+            <label for="agent-adresse">Adresse de départ (physique complète)</label>
+            <input type="text" id="agent-adresse" value="Avenue Habib Bourguiba, Tunis, Tunisie" placeholder="Ex: Avenue Habib Bourguiba, Tunis, Tunisie">
           </div>
-          <div class="agent-location-tag" id="agent-location-tag">
-            <i class="fa-solid fa-location-dot"></i> <span id="agent-location-tag-text">Localisation...</span>
+          <div class="input-group">
+            <label for="heure-debut">Heure de départ</label>
+            <input type="time" id="heure-debut" value="10:00">
           </div>
+
         </div>
       </div>
 
@@ -86,7 +92,7 @@
     <!-- Main Workspace Grid -->
     <section class="workspace-grid">
       
-      <!-- Left Column: Patient List -->
+      <!-- Left Column: Unified Patient List & Tour Sequence -->
       <div class="patients-column">
         <div class="card full-height">
           <div class="card-header border-bottom">
@@ -94,9 +100,17 @@
               <i class="fa-solid fa-hospital-user icon-blue"></i>
               <h3>Liste des Patients (<span id="patients-count">0</span>)</h3>
             </div>
-            <button class="btn btn-sm btn-outline-danger" id="btn-reset-patients" title="Réinitialiser la liste par défaut">
-              <i class="fa-solid fa-rotate-left"></i> Par défaut
-            </button>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span class="badge badge-neutral" id="tournee-status-badge">Non optimisée</span>
+              <button class="btn btn-sm btn-outline-danger" id="btn-reset-patients" title="Réinitialiser la liste par défaut">
+                <i class="fa-solid fa-rotate-left"></i> Par défaut
+              </button>
+            </div>
+          </div>
+
+          <div class="reorder-hint" id="reorder-hint" style="display:none; margin: 12px 16px 0 16px;">
+            <i class="fa-solid fa-circle-info"></i>
+            Glissez-déposez un patient ou utilisez les flèches ↑↓ pour réordonner la tournée en direct.
           </div>
           
           <div class="patients-list-container" id="patients-list">
@@ -105,7 +119,7 @@
         </div>
       </div>
 
-      <!-- Right Column: Interactive Map & Results -->
+      <!-- Right Column: Interactive Map & Optimization Stats Dashboard -->
       <div class="results-column">
         
         <!-- Interactive Map Container -->
@@ -130,7 +144,7 @@
           <div class="card-header border-bottom">
             <div class="card-title">
               <i class="fa-solid fa-chart-line icon-blue"></i>
-              <h3>Résultat de l'Optimisation</h3>
+              <h3>Bilan de la Tournée</h3>
             </div>
             <div class="badge badge-success" id="optimization-status">
               <i class="fa-solid fa-check"></i> Prêt
@@ -139,37 +153,23 @@
 
           <div class="stats-row">
             <div class="stat-box">
-              <i class="fa-solid fa-road stat-icon"></i>
-              <div class="stat-content">
-                <span class="stat-label">Distance Totale</span>
-                <span class="stat-value" id="res-distance">-- km</span>
-              </div>
-            </div>
-
-            <div class="stat-box">
               <i class="fa-solid fa-clock stat-icon"></i>
               <div class="stat-content">
                 <span class="stat-label">Durée Estimée</span>
-                <span class="stat-value" id="res-duree">-- min</span>
+                <span class="stat-value" id="res-duree">--</span>
               </div>
             </div>
 
             <div class="stat-box">
               <i class="fa-solid fa-flag-checkered stat-icon"></i>
               <div class="stat-content">
-                <span class="stat-label">Position Finale</span>
-                <span class="stat-value" id="res-pos-finale">--</span>
+                <span class="stat-label">Heure de Fin</span>
+                <span class="stat-value" id="res-heure-fin">--:--</span>
               </div>
             </div>
           </div>
 
-          <!-- Tour Timeline / Sequence -->
-          <div class="tour-sequence-section">
-            <h4><i class="fa-solid fa-list-ol"></i> Ordre Visité Recommandé (Urgence & Distance)</h4>
-            <div class="timeline-container" id="timeline-list">
-              <p class="empty-timeline-text">Cliquez sur <strong>"Optimiser la Tournée"</strong> pour afficher le parcours optimal.</p>
-            </div>
-          </div>
+          <div id="reorder-note-container"></div>
         </div>
 
       </div>
@@ -226,21 +226,21 @@
               </select>
             </div>
             <div class="form-group">
-              <label for="p-duree">Durée du soin (min) *</label>
-              <input type="number" id="p-duree" value="20" min="5" max="180" required>
+              <label for="p-duree">Durée du soin (min)</label>
+              <input type="number" id="p-duree" value="10" min="10" max="10" disabled>
             </div>
             <div class="form-group full-width">
-              <label for="p-adresse">Adresse *</label>
-              <input type="text" id="p-adresse" required placeholder="Ex: 12 Rue de Marseille, Tunis">
+              <label for="p-adresse">Adresse Physique *</label>
+              <input type="text" id="p-adresse" required placeholder="Ex: Rue de Marseille, Tunis, Tunisie">
             </div>
           </div>
           <div class="quick-preset-container">
-            <span class="preset-label"><i class="fa-solid fa-bolt"></i> Zones rapides (Grand Tunis) :</span>
-            <button type="button" class="preset-btn" data-adresse="Tunis, Tunisie">Tunis</button>
-            <button type="button" class="preset-btn" data-adresse="La Marsa, Tunis, Tunisie">La Marsa</button>
-            <button type="button" class="preset-btn" data-adresse="Ariana, Tunisie">Ariana</button>
-            <button type="button" class="preset-btn" data-adresse="Le Bardo, Tunisie">Bardo</button>
-            <button type="button" class="preset-btn" data-adresse="Ben Arous, Tunisie">Ben Arous</button>
+            <span class="preset-label"><i class="fa-solid fa-bolt"></i> Presets rapides (Grand Tunis) :</span>
+            <button type="button" class="preset-btn" data-adresse="Rue de Marseille, Tunis, Tunisie" data-lat="36.8189" data-lng="10.1658">Tunis</button>
+            <button type="button" class="preset-btn" data-adresse="La Marsa, Tunis, Tunisie" data-lat="36.8663" data-lng="10.3242">La Marsa</button>
+            <button type="button" class="preset-btn" data-adresse="Ariana, Tunisie" data-lat="36.8622" data-lng="10.1956">Ariana</button>
+            <button type="button" class="preset-btn" data-adresse="Le Bardo, Tunisie" data-lat="36.8093" data-lng="10.1408">Bardo</button>
+            <button type="button" class="preset-btn" data-adresse="Ben Arous, Tunisie" data-lat="36.7538" data-lng="10.2270">Ben Arous</button>
           </div>
         </div>
 
