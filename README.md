@@ -14,7 +14,6 @@ microservice_tournee/
 │   ├── data.py         # dataset statique (agent, patients) pour le POC
 │   ├── distance.py     # haversine() + construction de la matrice de distances
 │   ├── routing.py      # NN, NN pondéré, 2-opt, optimiser_tournee(), reordonner_manuellement()
-│   └── export.py       # export de la tournée optimisée en CSV
 │
 ├── main.py             # script de démonstration standalone (exécute tout le flux)
 │
