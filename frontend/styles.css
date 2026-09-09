@@ -1008,3 +1008,79 @@ body {
   text-decoration: line-through;
   color: var(--text-muted);
 }
+
+/* --------------------------------------------------------------------------
+   Suivi temps réel (UC6) — badges de statut et boutons d'action
+   -------------------------------------------------------------------------- */
+
+.suivi-hint {
+  background: var(--bg-beige-light);
+  border-color: var(--border-beige);
+  color: var(--text-muted);
+}
+
+.btn-suivi {
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #ffffff;
+  white-space: nowrap;
+  transition: filter 0.15s ease, transform 0.15s ease;
+}
+
+.btn-suivi:hover {
+  filter: brightness(0.92);
+}
+
+.btn-suivi:active {
+  transform: scale(0.97);
+}
+
+.btn-suivi-en-route {
+  background: var(--primary-blue);
+}
+
+.btn-suivi-arrivee {
+  background: #d97706;
+}
+
+.btn-suivi-termine {
+  background: #059669;
+}
+
+.badge-suivi-a-venir {
+  background: var(--bg-beige-accent);
+  color: #78350f;
+  border: 1px solid var(--border-beige);
+}
+
+.badge-suivi-en-route {
+  background: var(--primary-blue-light);
+  color: var(--primary-blue-hover);
+  border: 1px solid var(--primary-blue-border);
+}
+
+.badge-suivi-arrivee {
+  background: #fffbeb;
+  color: #b45309;
+  border: 1px solid #fde68a;
+}
+
+.badge-suivi-termine {
+  background: var(--done-bg);
+  color: var(--done-text);
+  border: 1px solid var(--done-border);
+}
+
+.time-badge-note {
+  font-size: 0.7rem;
+  font-weight: 600;
+  opacity: 0.7;
+  margin-left: 4px;
+}

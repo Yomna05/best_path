@@ -6,6 +6,13 @@
  * (UC4). Il ne peut ni ajouter ni supprimer un patient depuis cette
  * interface — cette décision relève de l'affectation, gérée exclusivement
  * par la plateforme Med.tn (hors périmètre de ce microservice).
+ *
+ * Note de conception (UC6) : le suivi temps réel (statut "à venir" / "en
+ * route" / "arrivé" / "terminé" de chaque étape) est piloté par l'agent via
+ * les boutons d'action de chaque carte patient. Chaque changement de statut
+ * envoie un événement horodaté à POST /api/v1/evenements-tournee — c'est ce
+ * flux d'événements qui fait à la fois office de UC5 ("marquer comme
+ * terminé") et de UC6 (traçabilité temps réel), sans duplication de logique.
  */
 
 const API_BASE_URL = window.location.origin;
@@ -54,7 +61,7 @@ let state = {
   patients: trierPatients(DEFAULT_PATIENTS), // tri initial par urgence
   lastOptimization: null,   // dernière réponse API (contient "tournee" courante)
   tourneeInitialeProposee: null, // tournée proposée par optimiser-tournee, conservée pour comparaison (UC7)
-  completedIds: new Set(),  // ids des patients marqués "terminé"
+  suiviStatuts: {},         // { patientId: "a_venir" | "en_route" | "arrivee" | "termine" }, cf. UC6
   draggedIndex: null
 };
 
@@ -82,12 +89,13 @@ function bindEvents() {
   }
 
   // 2. Button Par defaut (Reset ordre patients — ne modifie jamais la
-  //    composition de la liste, uniquement son tri/état d'optimisation)
+  //    composition de la liste, uniquement son tri/état d'optimisation et
+  //    de suivi)
   const btnReset = document.getElementById("btn-reset-patients");
   if (btnReset) {
     btnReset.addEventListener("click", () => {
       state.patients = trierPatients(DEFAULT_PATIENTS); // reset + retri
-      state.completedIds.clear();
+      state.suiviStatuts = {};
       state.lastOptimization = null;
       state.tourneeInitialeProposee = null;
       renderPatients();
@@ -101,6 +109,8 @@ function bindEvents() {
       if (heureFinElem) heureFinElem.textContent = "--:--";
       const reorderHint = document.getElementById("reorder-hint");
       if (reorderHint) reorderHint.style.display = "none";
+      const suiviHint = document.getElementById("suivi-hint");
+      if (suiviHint) suiviHint.style.display = "none";
     });
   }
 
@@ -150,6 +160,11 @@ function minutesEnHeure(totalMinutes) {
  * Calcule, pour un ordre de tournée donné, l'heure d'arrivée et l'heure de
  * fin (départ) chez chaque patient, à partir de l'heure de départ de
  * l'agent. Chaque visite dure VISIT_DURATION_MIN minutes.
+ *
+ * Ce sont des horaires ESTIMÉS (calcul haversine côté client) — à distinguer
+ * du statut RÉEL de la tournée (state.suiviStatuts), alimenté par les
+ * événements UC6 envoyés au fil de l'eau. Le rapprochement entre les deux
+ * est justement la matière du futur rapport "estimé vs. réalisé" (UC7).
  */
 function calculerHoraires(tourneeOrder) {
   const agentLat = state.agent.lat;
@@ -271,6 +286,133 @@ function drawRouteOnMap(tourneeOrder) {
 }
 
 /* --------------------------------------------------------------------------
+   Suivi temps réel (UC6) — statuts, événements, actions de l'agent
+   -------------------------------------------------------------------------- */
+
+/**
+ * Envoie un événement de suivi au microservice (POST /api/v1/evenements-tournee).
+ * Retourne true/false selon le succès de l'envoi.
+ *
+ * Ne bloque jamais l'interface en cas d'échec réseau (le statut affiché
+ * reste tel quel côté client) — l'agent doit pouvoir continuer sa tournée
+ * même si la connectivité est mauvaise sur le terrain ; un avertissement est
+ * simplement loggé en console.
+ */
+async function envoyerEvenementSuivi(patientId, typeEvenement) {
+  const payload = {
+    agent_id: state.agent.id,
+    patient_id: patientId,
+    type_evenement: typeEvenement,
+    horodatage: new Date().toISOString(),
+    position: { lat: state.agent.lat, lng: state.agent.lng }
+  };
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/v1/evenements-tournee`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const errData = await response.json();
+      console.warn("Événement de suivi refusé par le serveur:", formatErreurAPI(errData));
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error("Erreur réseau lors de l'envoi de l'événement de suivi:", err);
+    return false;
+  }
+}
+
+/**
+ * Étape 1 du workflow : l'agent quitte sa position actuelle vers ce patient.
+ * Envoie "depart" pour la toute première étape de la tournée (départ de la
+ * base), "en_route" pour les étapes suivantes (départ du patient précédent).
+ */
+async function marquerDepart(patientId, idx) {
+  state.suiviStatuts[patientId] = "en_route";
+  renderPatients();
+  await envoyerEvenementSuivi(patientId, idx === 0 ? "depart" : "en_route");
+}
+
+/** Étape 2 : l'agent arrive chez le patient. */
+async function marquerArrivee(patientId) {
+  state.suiviStatuts[patientId] = "arrivee";
+  renderPatients();
+  await envoyerEvenementSuivi(patientId, "arrivee");
+}
+
+/** Étape 3 : l'agent termine la prestation chez ce patient (= UC5 + UC6). */
+async function marquerFinService(patientId) {
+  state.suiviStatuts[patientId] = "termine";
+  renderPatients();
+  await envoyerEvenementSuivi(patientId, "fin_service");
+}
+
+/**
+ * Réinitialise l'affichage local d'une étape déjà marquée "terminé" (en cas
+ * de clic accidentel). Ne supprime PAS les événements déjà envoyés au
+ * serveur : le journal UC6 est un journal en ajout seul (append-only),
+ * comme un vrai journal d'audit — on ne réécrit pas l'historique, on
+ * recommence juste l'étape côté agent.
+ */
+function annulerStatutPatient(patientId) {
+  state.suiviStatuts[patientId] = "a_venir";
+  renderPatients();
+}
+
+/**
+ * Construit le bloc HTML d'action/statut pour une étape de la tournée.
+ * idx           : position de ce patient dans la tournée (0 = premier)
+ * statut        : "a_venir" | "en_route" | "arrivee" | "termine"
+ * estEtapeActive: true seulement pour la première étape non terminée —
+ *                 seule l'étape active affiche un bouton d'action, les
+ *                 étapes futures affichent un badge passif "À venir".
+ */
+function renderActionSuivi(patientId, idx, statut, estEtapeActive) {
+  if (statut === "termine") {
+    return `
+      <span class="badge badge-suivi-termine"><i class="fa-solid fa-check"></i> Terminé</span>
+      <button class="btn-icon-move" onclick="annulerStatutPatient('${patientId}')" title="Annuler (n'efface pas l'historique déjà envoyé)">
+        <i class="fa-solid fa-rotate-left"></i>
+      </button>
+    `;
+  }
+
+  if (!estEtapeActive) {
+    return `<span class="badge badge-suivi-a-venir">À venir</span>`;
+  }
+
+  if (statut === "a_venir") {
+    const estPremiereEtape = idx === 0;
+    return `
+      <button class="btn-suivi btn-suivi-en-route" onclick="marquerDepart('${patientId}', ${idx})">
+        <i class="fa-solid ${estPremiereEtape ? 'fa-door-open' : 'fa-car'}"></i> ${estPremiereEtape ? 'Départ' : 'En route'}
+      </button>`;
+  }
+
+  if (statut === "en_route") {
+    return `
+      <span class="badge badge-suivi-en-route"><i class="fa-solid fa-car"></i> En route</span>
+      <button class="btn-suivi btn-suivi-arrivee" onclick="marquerArrivee('${patientId}')">
+        <i class="fa-solid fa-location-dot"></i> Arrivé
+      </button>`;
+  }
+
+  if (statut === "arrivee") {
+    return `
+      <span class="badge badge-suivi-arrivee"><i class="fa-solid fa-location-dot"></i> Chez le patient</span>
+      <button class="btn-suivi btn-suivi-termine" onclick="marquerFinService('${patientId}')">
+        <i class="fa-solid fa-check"></i> Terminer la visite
+      </button>`;
+  }
+
+  return "";
+}
+
+/* --------------------------------------------------------------------------
    Patient List & Tour Sequence Rendering & Actions
    -------------------------------------------------------------------------- */
 function renderPatients() {
@@ -279,6 +421,7 @@ function renderPatients() {
 
   const statusBadge = document.getElementById("tournee-status-badge");
   const reorderHint = document.getElementById("reorder-hint");
+  const suiviHint = document.getElementById("suivi-hint");
 
   if (state.patients.length === 0) {
     container.innerHTML = `
@@ -290,6 +433,7 @@ function renderPatients() {
       statusBadge.className = "badge badge-neutral";
     }
     if (reorderHint) reorderHint.style.display = "none";
+    if (suiviHint) suiviHint.style.display = "none";
     updateMapMarkers();
     return;
   }
@@ -312,9 +456,21 @@ function renderPatients() {
   if (reorderHint) {
     reorderHint.style.display = isOptimized && state.lastOptimization.tournee.length > 1 ? "flex" : "none";
   }
+  if (suiviHint) {
+    suiviHint.style.display = isOptimized ? "flex" : "none";
+  }
 
   let patientsToRender = [];
   let horairesMap = new Map();
+
+  // Position (index dans la tournée) de la première étape pas encore
+  // terminée — seule celle-ci affiche un bouton d'action (cf. renderActionSuivi)
+  let indexEtapeActive = -1;
+  if (isOptimized) {
+    indexEtapeActive = state.lastOptimization.tournee.findIndex(
+      pid => (state.suiviStatuts[pid] || "a_venir") !== "termine"
+    );
+  }
 
   if (isOptimized) {
     const { horaires } = calculerHoraires(state.lastOptimization.tournee);
@@ -343,7 +499,9 @@ function renderPatients() {
     const p = item.patient;
     const inTour = item.inTour;
     const h = inTour ? horairesMap.get(p.id) : null;
-    const estTermine = state.completedIds.has(p.id);
+    const statutSuivi = state.suiviStatuts[p.id] || "a_venir";
+    const estTermine = statutSuivi === "termine";
+    const estEtapeActive = inTour && idx === indexEtapeActive;
 
     let badgeClass = "badge-u1";
     let urgenceLabel = "Urgence 1 (Faible)";
@@ -375,9 +533,7 @@ function renderPatients() {
               <button class="btn-icon-move" onclick="deplacerPatient(${idx}, 1)" title="Descendre" ${idx === totalTourSteps - 1 ? "disabled" : ""}>
                 <i class="fa-solid fa-chevron-down"></i>
               </button>
-              <button class="btn-toggle-done ${estTermine ? 'is-done' : ''}" onclick="toggleTermine('${p.id}')" title="Marquer comme terminé">
-                <i class="fa-solid ${estTermine ? 'fa-rotate-left' : 'fa-check'}"></i> ${estTermine ? 'Annuler' : 'Terminé'}
-              </button>
+              ${renderActionSuivi(p.id, idx, statutSuivi, estEtapeActive)}
             ` : ''}
           </div>
         </div>
@@ -388,6 +544,7 @@ function renderPatients() {
               <i class="fa-solid fa-right-to-bracket"></i> Arrivée ${h.arrivee}
               &nbsp;→&nbsp;
               <i class="fa-solid fa-right-from-bracket"></i> Fin ${h.fin}
+              <span class="time-badge-note">(estimé)</span>
             </span>
             <span style="font-size: 0.78rem; color: var(--text-muted);"><i class="fa-solid fa-clock"></i> Visite ${VISIT_DURATION_MIN} min</span>
           </div>
@@ -483,7 +640,9 @@ async function runOptimization() {
     const data = await response.json();
     state.lastOptimization = data;
     state.tourneeInitialeProposee = [...data.tournee];
-    state.completedIds.clear();
+    // Nouvelle tournée = nouveau suivi temps réel, on repart de "à venir" pour chacun
+    state.suiviStatuts = {};
+    data.tournee.forEach(pid => { state.suiviStatuts[pid] = "a_venir"; });
 
     displayOptimizationResults(data);
     drawRouteOnMap(data.tournee);
@@ -586,17 +745,6 @@ function onDrop(e, index) {
   state.draggedIndex = null;
 
   appliquerReordonnancement(tournee);
-}
-
-function toggleTermine(patientId) {
-  if (state.completedIds.has(patientId)) {
-    state.completedIds.delete(patientId);
-  } else {
-    state.completedIds.add(patientId);
-  }
-  if (state.lastOptimization) {
-    displayOptimizationResults(state.lastOptimization);
-  }
 }
 
 /* --------------------------------------------------------------------------

@@ -15,7 +15,8 @@ Puis ouvrir http://127.0.0.1:8000/docs pour la documentation interactive.
 
 import os
 from contextlib import asynccontextmanager
-from typing import List
+from datetime import datetime
+from typing import List, Literal, Optional
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
@@ -293,3 +294,86 @@ def route_reordonner_tournee(requete: ReordonnerTourneeRequest, request: Request
         raise HTTPException(status_code=400, detail=str(e))
 
     return resultat
+
+
+# ---------------------------------------------------------------------------
+# UC6 — Suivi temps réel (événements horodatés du parcours de l'agent)
+# ---------------------------------------------------------------------------
+#
+# ⚠️ COMPROMIS DE POC, ASSUMÉ ET DOCUMENTÉ (cf. dossier projet, Partie II §6,
+# annexe C2) : cet endpoint introduit un état (la liste des événements) dans
+# un microservice par ailleurs conçu comme stateless (cf. §1.1 de l'étude).
+# C'est une exception volontaire et limitée à ce seul besoin de démonstration
+# UC6 — elle ne remet pas en cause le caractère stateless de optimiser-tournee
+# et reordonner-tournee, qui reste total.
+#
+# Stockage : simple liste Python en mémoire (_evenements_tournee), choisie
+# plutôt qu'une vraie base de données pour rester dans le périmètre "problem
+# solving" du PFE. Limite assumée : les événements sont PERDUS au redémarrage
+# du serveur — inacceptable en production, où une vraie persistance (base de
+# données) ou un service de reporting dédié serait nécessaire (cf. Partie
+# III §3, perspectives).
+
+_evenements_tournee: List[dict] = []
+
+
+class PositionEvenement(BaseModel):
+    lat: float
+    lng: float
+
+
+class EvenementTourneeIn(BaseModel):
+    """
+    Un micro-événement horodaté du parcours d'un agent (cf. UC6, §3 de
+    l'étude) : départ, trajet en cours, arrivée chez un patient, ou fin de
+    prestation. La séquence de ces événements permet de reconstituer a
+    posteriori le parcours réellement réalisé (base du rapport "estimé vs.
+    réalisé", UC7).
+    """
+    agent_id: str
+    patient_id: str
+    type_evenement: Literal["depart", "en_route", "arrivee", "fin_service"]
+    horodatage: datetime
+    position: Optional[PositionEvenement] = Field(
+        default=None, description="Position GPS de l'agent au moment de l'envoi (optionnelle)."
+    )
+
+
+class EvenementTourneeOut(EvenementTourneeIn):
+    pass
+
+
+class EnregistrerEvenementResponse(BaseModel):
+    message: str
+    nombre_evenements_agent: int
+
+
+@app.post(
+    "/api/v1/evenements-tournee",
+    response_model=EnregistrerEvenementResponse,
+    status_code=201,
+)
+def route_enregistrer_evenement(evenement: EvenementTourneeIn):
+    """
+    Enregistre un événement de suivi temps réel envoyé par l'application de
+    l'agent (UC6). Stockage en mémoire uniquement (cf. note ci-dessus) —
+    n'importe quel client peut ensuite relire ces événements via
+    GET /api/v1/evenements-tournee/{agent_id}, utile pour la démonstration
+    et pour construire, côté Med.tn, le rapport UC7 "estimé vs. réalisé".
+    """
+    _evenements_tournee.append(evenement.model_dump(mode="json"))
+    nb = sum(1 for e in _evenements_tournee if e["agent_id"] == evenement.agent_id)
+    return {"message": "Événement enregistré.", "nombre_evenements_agent": nb}
+
+
+@app.get(
+    "/api/v1/evenements-tournee/{agent_id}",
+    response_model=List[EvenementTourneeOut],
+)
+def route_lister_evenements(agent_id: str):
+    """
+    Retourne, dans l'ordre de réception, tous les événements enregistrés
+    pour un agent donné — utile pour la démonstration (soutenance) et pour
+    vérifier manuellement le contenu du stockage en mémoire.
+    """
+    return [e for e in _evenements_tournee if e["agent_id"] == agent_id]
