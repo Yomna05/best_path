@@ -1,5 +1,11 @@
 /**
  * Med.tn — Microservice Tournée Web Frontend Application
+ *
+ * Note de conception (UC3) : l'agent CONSULTE la liste de patients qui lui a
+ * été affectée par Med.tn et peut uniquement en RÉORDONNER l'ordre de visite
+ * (UC4). Il ne peut ni ajouter ni supprimer un patient depuis cette
+ * interface — cette décision relève de l'affectation, gérée exclusivement
+ * par la plateforme Med.tn (hors périmètre de ce microservice).
  */
 
 const API_BASE_URL = window.location.origin;
@@ -11,7 +17,8 @@ const VISIT_DURATION_MIN = 10;
 // (doit rester cohérente avec app/routing.py : distance_km / 30 * 60)
 const VITESSE_MOYENNE_KMH = 30;
 
-// Default dataset matching app/data.py (durée désormais fixée à 10 min pour tous)
+// Jeu de patients affectés par Med.tn à cet agent (correspond à app/data.py,
+// durée désormais fixée à 10 min pour tous)
 const DEFAULT_PATIENTS = [
   { id: "P1", nom: "Trabelsi", prenom: "Amel", contact: "+216 20 123 456", adresse: "Rue de Marseille, Tunis, Tunisie", lat: 36.8189, lng: 10.1658, service: "prelevement", urgence: 2, duree: VISIT_DURATION_MIN },
   { id: "P2", nom: "Gharbi", prenom: "Sami", contact: "+216 22 234 567", adresse: "Avenue Mohamed V, Tunis, Tunisie", lat: 36.8020, lng: 10.1900, service: "consultation", urgence: 1, duree: VISIT_DURATION_MIN },
@@ -26,8 +33,8 @@ const DEFAULT_PATIENTS = [
 /**
  * Trie un tableau de patients par urgence décroissante (3→2→1),
  * puis alphabétiquement par nom pour un ordre stable et prévisible.
- * Utilisé à chaque ajout/reset pour que la liste reflète les priorités
- * avant même le lancement de l'optimisation.
+ * Utilisé à l'initialisation et au reset pour que la liste reflète les
+ * priorités avant même le lancement de l'optimisation.
  */
 function trierPatients(patients) {
   return [...patients].sort((a, b) => {
@@ -74,7 +81,8 @@ function bindEvents() {
     btnOptimiser.addEventListener("click", runOptimization);
   }
 
-  // 2. Button Par defaut (Reset patients)
+  // 2. Button Par defaut (Reset ordre patients — ne modifie jamais la
+  //    composition de la liste, uniquement son tri/état d'optimisation)
   const btnReset = document.getElementById("btn-reset-patients");
   if (btnReset) {
     btnReset.addEventListener("click", () => {
@@ -96,82 +104,7 @@ function bindEvents() {
     });
   }
 
-  // 3. Modal open / close
-  const modal = document.getElementById("modal-add-patient");
-  const btnOpenModal = document.getElementById("btn-open-add-modal");
-  const btnCloseModal = document.getElementById("btn-close-modal");
-  const btnCancelModal = document.getElementById("btn-cancel-modal");
-
-  const openModal = () => {
-    if (modal) modal.classList.add("show");
-  };
-  const closeModal = () => {
-    if (modal) modal.classList.remove("show");
-  };
-
-  if (btnOpenModal) btnOpenModal.addEventListener("click", openModal);
-  if (btnCloseModal) btnCloseModal.addEventListener("click", closeModal);
-  if (btnCancelModal) btnCancelModal.addEventListener("click", closeModal);
-
-  // 4. Presets buttons in modal
-  document.querySelectorAll(".preset-btn").forEach(btn => {
-    btn.addEventListener("click", (e) => {
-      const adresse = e.currentTarget.dataset.adresse;
-      const lat = parseFloat(e.currentTarget.dataset.lat);
-      const lng = parseFloat(e.currentTarget.dataset.lng);
-      if (adresse) document.getElementById("p-adresse").value = adresse;
-      if (!isNaN(lat) && !isNaN(lng)) {
-        btn.dataset.selectedLat = lat;
-        btn.dataset.selectedLng = lng;
-      }
-    });
-  });
-
-  // 5. Add Patient Form Submit
-  const formAddPatient = document.getElementById("form-add-patient");
-  if (formAddPatient) {
-    formAddPatient.addEventListener("submit", (e) => {
-      e.preventDefault();
-      const id = document.getElementById("p-id").value.trim();
-      const nom = document.getElementById("p-nom").value.trim();
-      const prenom = document.getElementById("p-prenom").value.trim();
-      const contact = document.getElementById("p-contact").value.trim();
-      const service = document.getElementById("p-service").value;
-      const urgence = parseInt(document.getElementById("p-urgence").value, 10);
-      const adresse = document.getElementById("p-adresse").value.trim();
-
-      if (state.patients.some(p => p.id === id)) {
-        alert(`Un patient avec l'ID ${id} existe déjà.`);
-        return;
-      }
-
-      // Check preset coordinates matching address if clicked
-      let lat = 36.8065;
-      let lng = 10.1815;
-      const presetMatch = Array.from(document.querySelectorAll(".preset-btn")).find(b => b.dataset.adresse === adresse);
-      if (presetMatch) {
-        lat = parseFloat(presetMatch.dataset.lat);
-        lng = parseFloat(presetMatch.dataset.lng);
-      }
-
-      state.patients.push({
-        id, nom, prenom, contact, adresse, lat, lng, service, urgence, duree: VISIT_DURATION_MIN
-      });
-
-      // Retrier après ajout : le nouveau patient prend sa place selon l'urgence
-      state.patients = trierPatients(state.patients);
-
-      // Si une optimisation était en cours, l'invalider car la liste a changé
-      state.lastOptimization = null;
-      state.tourneeInitialeProposee = null;
-
-      renderPatients();
-      closeModal();
-      formAddPatient.reset();
-    });
-  }
-
-  // 6. Heure debut change handler
+  // 3. Heure debut change handler
   const heureDebutInput = document.getElementById("heure-debut");
   if (heureDebutInput) {
     heureDebutInput.addEventListener("change", () => {
@@ -343,7 +276,6 @@ function drawRouteOnMap(tourneeOrder) {
 function renderPatients() {
   const container = document.getElementById("patients-list");
   document.getElementById("patients-count").textContent = state.patients.length;
-  // agent-id-display removed — agent ID is fixed in state
 
   const statusBadge = document.getElementById("tournee-status-badge");
   const reorderHint = document.getElementById("reorder-hint");
@@ -351,7 +283,7 @@ function renderPatients() {
   if (state.patients.length === 0) {
     container.innerHTML = `
       <div class="empty-timeline-text">
-        Aucun patient attribué pour le moment. Cliquez sur <strong>"+ Ajouter Patient"</strong> pour commencer.
+        Aucun patient affecté pour le moment par Med.tn.
       </div>`;
     if (statusBadge) {
       statusBadge.textContent = "Vide";
@@ -447,9 +379,6 @@ function renderPatients() {
                 <i class="fa-solid ${estTermine ? 'fa-rotate-left' : 'fa-check'}"></i> ${estTermine ? 'Annuler' : 'Terminé'}
               </button>
             ` : ''}
-            <button class="btn-icon-delete" onclick="deletePatient('${p.id}')" title="Supprimer ce patient">
-              <i class="fa-solid fa-trash-can"></i>
-            </button>
           </div>
         </div>
 
@@ -477,36 +406,6 @@ function renderPatients() {
   }).join("");
 
   updateMapMarkers(tourneeOrderForMarkers);
-}
-
-function deletePatient(patientId) {
-  state.patients = state.patients.filter(p => p.id !== patientId);
-  state.completedIds.delete(patientId);
-
-  if (state.lastOptimization && state.lastOptimization.tournee) {
-    state.lastOptimization.tournee = state.lastOptimization.tournee.filter(id => id !== patientId);
-  }
-  if (state.tourneeInitialeProposee) {
-    state.tourneeInitialeProposee = state.tourneeInitialeProposee.filter(id => id !== patientId);
-  }
-
-  renderPatients();
-
-  if (state.lastOptimization && state.lastOptimization.tournee && state.lastOptimization.tournee.length > 0) {
-    displayOptimizationResults(state.lastOptimization);
-    drawRouteOnMap(state.lastOptimization.tournee);
-  } else {
-    state.lastOptimization = null;
-    state.tourneeInitialeProposee = null;
-    if (routePolyline) {
-      map.removeLayer(routePolyline);
-      routePolyline = null;
-    }
-    const dureeElem2 = document.getElementById("res-duree");
-    if (dureeElem2) dureeElem2.textContent = "--";
-    const heureFinElem2 = document.getElementById("res-heure-fin");
-    if (heureFinElem2) heureFinElem2.textContent = "--:--";
-  }
 }
 
 /* --------------------------------------------------------------------------
